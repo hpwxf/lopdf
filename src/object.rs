@@ -890,6 +890,10 @@ impl Stream {
 
             if compressed.len() + 19 < self.content.len() {
                 self.dict.set("Filter", "FlateDecode");
+                // Without a filter, /DecodeParms described nothing (jsPDF writes raw soft
+                // masks with a PNG /Predictor); kept, it would now apply to FlateDecode
+                // and readers would run the predictor over raw samples.
+                self.dict.remove(b"DecodeParms");
                 self.set_content(compressed);
             }
         }
