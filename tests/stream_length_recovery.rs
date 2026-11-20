@@ -77,6 +77,67 @@ fn lenient_load_does_not_guess_an_ambiguous_stream_boundary() {
     assert!(document.get_object((4, 0)).is_err());
 }
 
+/// A TrueType font program whose dictionary has `/Length1` but no `/Length`,
+/// as 4-Heights PDF Library 3.4 writes form-field fonts.
+fn font_without_length(content: &[u8]) -> Vec<u8> {
+    let objects: Vec<(u32, Vec<u8>)> = vec![
+        (1, catalog().to_vec()),
+        (2, pages("3 0 R")),
+        (3, page("")),
+        (4, {
+            let mut body = format!("<< /Length1 {} >>\nstream\n", content.len()).into_bytes();
+            body.extend_from_slice(content);
+            body.extend_from_slice(b"\nendstream\n");
+            body
+        }),
+        (
+            5,
+            b"<< /Type /FontDescriptor /FontName /F /FontFile2 4 0 R >>\n".to_vec(),
+        ),
+    ];
+    let bodies: Vec<(u32, &[u8])> = objects.iter().map(|(id, body)| (*id, body.as_slice())).collect();
+    pdf_from_objects(&bodies, &[]).0
+}
+
+#[test]
+fn lenient_load_recovers_a_stream_without_length() {
+    let content = b"true\x00\x01 font program bytes";
+    let document = Document::load_mem(&font_without_length(content)).unwrap();
+    let Object::Stream(stream) = document.get_object((4, 0)).unwrap() else {
+        panic!("recovered object must remain a stream");
+    };
+    assert_eq!(stream.content, content);
+    assert_eq!(
+        stream.dict.get(b"Length").unwrap().as_i64().unwrap(),
+        content.len() as i64
+    );
+    assert!(document.get_object((5, 0)).is_ok());
+}
+
+#[test]
+fn strict_load_does_not_recover_a_stream_without_length() {
+    let strict = LoadOptions {
+        strict: true,
+        ..Default::default()
+    };
+    let document = Document::load_mem_with_options(&font_without_length(b"font program bytes"), strict).unwrap();
+    // Strict loading keeps the previous behaviour: the stream is deferred and stays empty.
+    let Object::Stream(stream) = document.get_object((4, 0)).unwrap() else {
+        panic!("object 4 must remain a stream");
+    };
+    assert!(stream.content.is_empty());
+}
+
+#[test]
+fn lenient_load_does_not_guess_the_end_of_a_stream_without_length() {
+    // Two candidate boundaries: nothing is recovered, the stream stays deferred (empty).
+    let document = Document::load_mem(&font_without_length(b"a\nendstream\nendobj\nb")).unwrap();
+    let Object::Stream(stream) = document.get_object((4, 0)).unwrap() else {
+        panic!("object 4 must remain a stream");
+    };
+    assert!(stream.content.is_empty());
+}
+
 #[test]
 fn lenient_load_does_not_recover_without_endstream() {
     let pdf = pdf_with_stream(0, b"unterminated stream bytes", b"\nendobj\n");

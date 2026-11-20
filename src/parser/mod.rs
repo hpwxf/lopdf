@@ -464,7 +464,22 @@ fn stream<'a>(
             }
             Err(_) => Err(nom::Err::Failure(NomError::from_error_kind(i, ErrorKind::LengthValue))),
         }
+    } else if !dict.has(b"Length")
+        && recover_length
+        && !reader.strict
+        && let Some((remaining, data)) =
+            recover_stream_length(&i[..recovery_bound.map_or(i.len(), |bound| i.len().saturating_sub(bound))])
+    {
+        // No /Length at all (some producers write only /Length1 on a /FontFile2): nothing
+        // will resolve one later, so deferring would leave the stream empty. Take the
+        // unambiguous object boundary, as for a wrong /Length above.
+        log::warn!(
+            "Stream dictionary has no Length; the unambiguous object boundary gives {} bytes.",
+            data.len()
+        );
+        Ok((remaining, Object::Stream(Stream::new(dict, data.to_vec()))))
     } else {
+        // An indirect /Length not loaded yet is resolved once loading is done.
         // Return position relative to the start of the stream dictionary.
         Ok((i, Object::Stream(Stream::with_position(dict, input.len() - i.len()))))
     }
